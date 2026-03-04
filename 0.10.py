@@ -259,3 +259,65 @@ EN un jsonl tenemos:
  Quiero que hagas un script en python para verificar cuantos OrderKey estan en order_key. LOs archivos estan en la misma carpeta que python script, pero para evitar problemas con el compilador usa PATH. 
 POr ahora solo eso. Hazlo hardcoded, que pueda colocar los nombres de los archivos dentro del codigo.
  
+
+import os
+import csv
+import json
+
+# ==============================
+# HARD CODED FILE NAMES
+# ==============================
+
+CSV_FILE = "orders_sqlserver.csv"
+JSONL_FILE = "orders_bigquery.jsonl"
+
+# ==============================
+# BUILD PATHS
+# ==============================
+
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+
+csv_path = os.path.join(BASE_PATH, CSV_FILE)
+jsonl_path = os.path.join(BASE_PATH, JSONL_FILE)
+
+# ==============================
+# READ CSV OrderKey
+# ==============================
+
+csv_order_keys = set()
+
+with open(csv_path, "r", encoding="utf-8") as f:
+    reader = csv.DictReader(f, delimiter=";")
+    for row in reader:
+        csv_order_keys.add(str(row["OrderKey"]))
+
+print(f"CSV OrderKeys: {len(csv_order_keys)}")
+
+# ==============================
+# READ JSONL order_key
+# ==============================
+
+json_order_keys = set()
+
+with open(jsonl_path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+    for row in data:
+        if "order_key" in row and row["order_key"] is not None:
+            json_order_keys.add(str(row["order_key"]))
+
+print(f"JSON order_keys: {len(json_order_keys)}")
+
+# ==============================
+# INTERSECTION
+# ==============================
+
+matches = csv_order_keys.intersection(json_order_keys)
+
+print("===================================")
+print(f"OrderKey in CSV: {len(csv_order_keys)}")
+print(f"order_key in JSON: {len(json_order_keys)}")
+print(f"Matches: {len(matches)}")
+print("===================================")
+
+
