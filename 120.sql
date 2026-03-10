@@ -775,3 +775,152 @@ Abhinav Chandna: "Is 90 days something in the original code? and the first call 
 Como hago con minimos cambios para cabiarlo a full load e incremental usando solo estas variables:
   DECLARE start_dt DATETIME DEFAULT DATETIME_SUB(CURRENT_DATETIME(), INTERVAL v_lookback_days DAY);
   DECLARE end_dt   DATETIME DEFAULT CURRENT_DATETIME();
+
+
+
+Tus reviewers están apuntando a dos cosas distintas:
+	1.	Que exista modo full load e incremental igual que en SQL Server.
+	2.	Que el lookback (90 vs 60) tenga sentido con la lógica original.
+
+Lo bueno: tu SP ya casi lo tiene, sólo falta ajustar la semántica de p_lookback_days.
+
+⸻
+
+1. Problema actual en tu SP
+
+Hoy tienes:
+
+DECLARE v_lookback_days INT64 DEFAULT IFNULL(p_lookback_days, 90);
+DECLARE start_dt DATETIME DEFAULT DATETIME_SUB(CURRENT_DATETIME(), INTERVAL v_lookback_days DAY);
+DECLARE end_dt   DATETIME DEFAULT CURRENT_DATETIME();
+
+y luego:
+
+IF p_lookback_days IS NULL THEN
+   -- created_date only
+ELSE
+   -- created_date OR updated_date
+END IF;
+
+Esto genera confusión conceptual:
+
+Caso	Qué pasa hoy
+NULL	usa 90 días
+60	usa 60 días incremental
+
+Pero el reviewer está esperando algo típico de ETL:
+
+Caso	Esperado
+NULL	FULL LOAD
+N días	INCREMENTAL
+
+
+⸻
+
+2. Cambio mínimo recomendado
+
+La solución es solo cambiar cómo se calcula start_dt.
+
+DECLARE start_dt DATETIME DEFAULT
+  IF(
+    p_lookback_days IS NULL,
+    DATETIME '1900-01-01',
+    DATETIME_SUB(CURRENT_DATETIME(), INTERVAL p_lookback_days DAY)
+  );
+
+DECLARE end_dt DATETIME DEFAULT CURRENT_DATETIME();
+
+No necesitas cambiar nada más del SP.
+
+⸻
+
+3. Cómo funciona después
+
+FULL LOAD
+
+CALL sp_load_orders(NULL);
+
+equivale a:
+
+start_dt = 1900-01-01
+
+→ carga todo.
+
+⸻
+
+INCREMENTAL
+
+CALL sp_load_orders(60);
+
+equivale a:
+
+start_dt = CURRENT_DATETIME() - 60 days
+
+→ carga cambios recientes.
+
+⸻
+
+4. Entonces qué responder al reviewer
+
+Sobre el comentario:
+
+Are we building full loads and incremental builds similar to the source code?
+
+Respuesta correcta:
+	•	Yes.
+	•	NULL parameter → full load
+	•	numeric parameter → incremental load based on lookback window.
+
+⸻
+
+Sobre:
+
+Is 90 days something in the original code?
+
+Lo correcto es no hardcodear 90.
+
+En SQL Server normalmente el orchestrator controla el lookback.
+
+Por eso lo mejor es:
+
+NULL → full
+N → incremental
+
+
+⸻
+
+5. Tu llamada quedaría
+
+Inicial (primer run):
+
+CALL `sqlserver_to_bq_silver.sp_load_orders`(NULL);
+
+Después incremental:
+
+CALL `sqlserver_to_bq_silver.sp_load_orders`(60);
+
+
+⸻
+
+6. TL;DR (la única línea que debes cambiar)
+
+Reemplaza:
+
+DECLARE v_lookback_days INT64 DEFAULT IFNULL(p_lookback_days, 90);
+DECLARE start_dt DATETIME DEFAULT DATETIME_SUB(CURRENT_DATETIME(), INTERVAL v_lookback_days DAY);
+
+por:
+
+DECLARE start_dt DATETIME DEFAULT
+  IF(
+    p_lookback_days IS NULL,
+    DATETIME '1900-01-01',
+    DATETIME_SUB(CURRENT_DATETIME(), INTERVAL p_lookback_days DAY)
+  );
+
+
+⸻
+
+Si quieres, también puedo mostrarte la forma exacta en que SQL Server hace este incremental (con @OrderIDs) y por qué tu implementación en BigQuery está muy cerca pero no exactamente igual, que probablemente será el siguiente comentario del reviewer.
+
+
