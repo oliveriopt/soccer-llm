@@ -852,3 +852,229 @@ Obtengo este error durante el deployment
 2026-03-10T14:43:25.8091221Z 
 2026-03-10T14:43:25.8117140Z ##[error]Bash exited with code '1'.
 2026-03-10T14:43:25.8152051Z ##[section]Finishing: Run pre-deployment checks
+
+
+
+Aquí va, con cambios mínimos.
+
+1) .sql corregido de la tabla
+
+CREATE OR REPLACE TABLE `sqlserver_to_bq_silver.stagingbrokerage_staging_orders` (
+  source_system_name STRING,
+  order_source_code STRING,
+  business_unit_code STRING,
+  service_type_code STRING,
+  order_status_type_code STRING,
+  brokerage_status_code STRING,
+  pickup_rescheduled_reason STRING,
+  drop_rescheduled_reason STRING,
+  is_on_hold STRING,
+  is_uncommited STRING,
+  order_financial_status_type_code STRING,
+  order_date DATETIME,
+  scheduled_pickup_date DATETIME,
+  scheduled_delivery_date DATETIME,
+  pickup_date DATETIME,
+  pickup_departure_date DATETIME,
+  delivered_date DATETIME,
+  delivery_arrival_date DATETIME,
+  carrier_assign_date DATETIME,
+  void_date TIMESTAMP,
+  freight_optimizer_customer_code STRING,
+  carrier_code STRING,
+  equipment_code STRING,
+  order_key INT64,
+  order_number STRING,
+  order_sales_amount NUMERIC,
+  line_haul_charge_amount NUMERIC,
+  fuel_charge_amount NUMERIC,
+  total_accessorial_charge NUMERIC,
+  detention_charge NUMERIC,
+  tonu_charge NUMERIC,
+  line_haul_pay_amount NUMERIC,
+  fuel_pay_amount NUMERIC,
+  order_cost NUMERIC,
+  lh_rate NUMERIC,
+  trip_count INT64,
+  bill_distance FLOAT64,
+  weight_in_pounds NUMERIC,
+  on_time_delivery INT64,
+  delivery_delay INT64,
+  on_time_pickup INT64,
+  pickup_delay INT64,
+  origin_city STRING,
+  origin_state_code STRING,
+  origin_postal_code STRING,
+  origin_country_code STRING,
+  origin_location_id INT64,
+  destination_city STRING,
+  destination_state_code STRING,
+  destination_postal_code STRING,
+  destination_country_code STRING,
+  destination_location_id INT64,
+  entered_by_user_name STRING,
+  primary_sales_rep_user_name STRING,
+  secondary_sales_rep_user_name STRING,
+  booked_by_user_name STRING,
+  primary_carrier_rep_user_name STRING,
+  freight_assign_rep_user_name STRING,
+  dispatch_office_location_code STRING,
+  cross_booked INT64,
+  bounce_to_bounce INT64,
+  created_by_user STRING,
+  is_hazmat BOOL,
+  quantity INT64,
+  pickup_late DATETIME,
+  carrier_portal_posting_date DATETIME,
+  is_drop_and_hook BOOL,
+  pickup_service_failure_code_id INT64,
+  pickup_service_failure_reason_category_id INT64,
+  delivery_service_failure_code_id INT64,
+  delivery_service_failure_reason_category_id INT64,
+  percentage_of_commission_primary FLOAT64,
+  company_id INT64,
+  value_of_goods NUMERIC,
+  bazooka_order_id INT64,
+  shipment_id STRING,
+  origin_scheduled_departure_time DATETIME,
+  destination_stop_scheduled_departure_time DATETIME,
+  trip_id INT64,
+  trip_brokerage_status_id INT64,
+  carrier_id INT64
+)
+PARTITION BY DATE(order_date)
+CLUSTER BY order_key;
+
+2) Qué cambió en la tabla
+
+Solo esto:
+
+void_date TIMESTAMP
+
+antes estaba como DATETIME.
+
+Y esto:
+
+line_haul_pay_amount NUMERIC,
+fuel_pay_amount NUMERIC,
+order_cost NUMERIC,
+
+antes estaban como FLOAT64.
+
+Y además estas líneas al final, para que no falle el deployment:
+
+PARTITION BY DATE(order_date)
+CLUSTER BY order_key;
+
+
+⸻
+
+3) Cambios mínimos en la SP
+
+Tu tabla tiene estas columnas extra:
+
+trip_id
+trip_brokerage_status_id
+carrier_id
+
+La SP no las estaba poblando. Para corregir eso sin mover lógica de transformación, agrega solo estas líneas.
+
+A) En CREATE TEMP TABLE tmp_src AS SELECT
+
+Agrega estas 3 columnas al final del SELECT, justo antes de:
+
+    destination_stop.scheduled_departure_time AS destination_stop_scheduled_departure_time
+
+Déjalo así:
+
+    origin_stop.scheduled_departure_time AS origin_scheduled_departure_time,
+    destination_stop.scheduled_departure_time AS destination_stop_scheduled_departure_time,
+    trip.trip_id AS trip_id,
+    trip.trip_brokerage_status_id AS trip_brokerage_status_id,
+    trip.carrier_id AS carrier_id
+
+
+⸻
+
+B) En WHEN MATCHED THEN UPDATE SET
+
+Agrega estas 3 líneas al final:
+
+      trip_id = S.trip_id,
+      trip_brokerage_status_id = S.trip_brokerage_status_id,
+      carrier_id = S.carrier_id
+
+Ojo: la línea anterior debe quedar con coma. Te dejo el cierre correcto:
+
+      bazooka_order_id = S.bazooka_order_id,
+      shipment_id = S.shipment_id,
+      origin_scheduled_departure_time = S.origin_scheduled_departure_time,
+      destination_stop_scheduled_departure_time = S.destination_stop_scheduled_departure_time,
+      trip_id = S.trip_id,
+      trip_brokerage_status_id = S.trip_brokerage_status_id,
+      carrier_id = S.carrier_id
+
+
+⸻
+
+C) En el bloque INSERT ( ... )
+
+Agrega estas 3 columnas al final:
+
+      trip_id,
+      trip_brokerage_status_id,
+      carrier_id
+
+Quedando así el cierre:
+
+      bazooka_order_id,
+      shipment_id,
+      origin_scheduled_departure_time,
+      destination_stop_scheduled_departure_time,
+      trip_id,
+      trip_brokerage_status_id,
+      carrier_id
+
+
+⸻
+
+D) En el bloque VALUES ( ... )
+
+Agrega estas 3 líneas al final:
+
+      S.trip_id,
+      S.trip_brokerage_status_id,
+      S.carrier_id
+
+Quedando así el cierre:
+
+      S.bazooka_order_id,
+      S.shipment_id,
+      S.origin_scheduled_departure_time,
+      S.destination_stop_scheduled_departure_time,
+      S.trip_id,
+      S.trip_brokerage_status_id,
+      S.carrier_id
+
+
+⸻
+
+4) Resumen exacto de inconsistencias corregidas
+
+Tipos:
+	•	void_date: SP devuelve TIMESTAMP, tabla debía ser TIMESTAMP
+	•	line_haul_pay_amount: SP devuelve NUMERIC, tabla debía ser NUMERIC
+	•	fuel_pay_amount: SP devuelve NUMERIC, tabla debía ser NUMERIC
+	•	order_cost: SP devuelve NUMERIC, tabla debía ser NUMERIC
+
+Columnas faltantes en la SP:
+	•	trip_id
+	•	trip_brokerage_status_id
+	•	carrier_id
+
+Y al DDL había que agregarle:
+	•	PARTITION BY DATE(order_date)
+	•	CLUSTER BY order_key
+
+Si quieres, te devuelvo ahora la SP completa ya parchada con solo esos cambios mínimos.
+
