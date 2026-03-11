@@ -1961,3 +1961,117 @@ def sql_to_bq_extraction_brkltl_ct():
 
 
 sql_to_bq_extraction_brkltl_ct = sql_to_bq_extraction_brkltl_ct()
+
+
+Sí. Déjalo también parametrizado.
+
+# dags/dag_sp_load_orders_daily.py
+
+from airflow.decorators import dag
+from airflow.operators.python import ShortCircuitOperator
+from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
+from airflow.operators.empty import EmptyOperator
+
+import pendulum
+
+from include.utils.pipe_config_loader import PipeConfigLoader
+
+
+# =========================================================
+# CONFIG
+# =========================================================
+source_type = "sqlserver"
+database_name = "xpomaster"
+schema_name = []
+type_of_data = "stored_procedure"
+table_type = f"{source_type}_objects"
+enabled_flag = True
+extraction_type = "sp_trigger"
+pool = "pool1"
+
+config_loader = PipeConfigLoader()
+env_config = config_loader.load_configurations(table_type)
+
+project_id = env_config["project_id"]
+region = env_config["region"]
+
+sp_dataset = env_config.get("silver_layer_bq_dataset", "sqlserver_to_bq_silver")
+sp_name = env_config.get("sp_load_orders_name", "sp_load_orders")
+sp_lookback_days = int(env_config.get("sp_load_orders_lookback_days", 1))
+
+DEFAULT_ARGS = {
+    "owner": "dataeng-datalake",
+    "start_date": pendulum.now("America/Chicago").subtract(days=1),
+}
+
+CST = pendulum.timezone("America/Chicago")
+
+
+# =========================================================
+# BLACKOUT GUARD
+# =========================================================
+def _should_run_now() -> bool:
+    now_local = pendulum.now(CST)
+    is_weekday = now_local.day_of_week in (0, 1, 2, 3, 4)
+    t = now_local.time()
+    in_blackout = (pendulum.time(6, 30) <= t < pendulum.time(11, 0))
+    return not (is_weekday and in_blackout)
+
+
+# =========================================================
+# DAG
+# =========================================================
+@dag(
+    dag_id="dag_sp_load_orders_daily",
+    default_args=DEFAULT_ARGS,
+    schedule="0 3 * * *",
+    catchup=False,
+    tags=["bigquery", "sp", "orders"],
+    max_active_runs=1,
+)
+def dag_sp_load_orders_daily():
+
+    start = EmptyOperator(task_id="start")
+
+    should_run_blackout_guard = ShortCircuitOperator(
+        task_id="should_run_blackout_guard",
+        python_callable=_should_run_now,
+    )
+
+    run_sp = BigQueryInsertJobOperator(
+        task_id="run_sp_load_orders",
+        configuration={
+            "query": {
+                "query": f"""
+CALL `{project_id}.{sp_dataset}.{sp_name}`({sp_lookback_days});
+                """,
+                "useLegacySql": False,
+            }
+        },
+        location=region,
+        gcp_conn_id="google_cloud_default",
+    )
+
+    end = EmptyOperator(task_id="end")
+
+    start >> should_run_blackout_guard >> run_sp >> end
+
+
+dag_sp_load_orders_daily = dag_sp_load_orders_daily()
+
+Con eso ya tomas de env_config:
+	•	project_id
+	•	region
+	•	silver_layer_bq_dataset → usado como sp_dataset
+	•	sp_load_orders_name → nombre del SP
+	•	sp_load_orders_lookback_days → parámetro del call
+
+El CALL queda así:
+
+CALL `{project_id}.{sp_dataset}.{sp_name}`({sp_lookback_days});
+
+Si en tu config no existen sp_load_orders_name y sp_load_orders_lookback_days, usa los defaults:
+	•	sp_load_orders
+	•	1
+
+
